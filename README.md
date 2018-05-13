@@ -1,19 +1,21 @@
 # Lab03文件系统
 ## 文件结构
 在我的程序中我将块大小设为2^19（524288）,将块个数设为2^13（8192），总大小为4G，具体可在函数开头更改各参数大小
-每个块中开头留两个int大小（以防万一留了16字节，可在开头更改）用于存放块信息（块序号和该文件下一个块的序号）
-在第一个块中存放了root指针
-struct filenode {
+
+每个块中开头留两个int大小（以防万一留了16字节，可在开头更改）用于存放块信息（块序号和该文件下一个块的序号），在第一个块中存放了root指针
+
+	struct filenode {
 	char *filename;
 	void *content;
-  struct filenode *next;
+  	struct filenode *next;
 	struct filenode *previous;
 	int fblock;//块号 
 	int hsize;//块已用大小 
 	struct stat *st;
-};
-节点形式为一简单双向链表，换成单链表亦可（具体名字和程序中略有不一样）
-（其中文件名未指定大小，按需要分配）
+	};
+
+节点形式为一简单双向链表，换成单链表亦可（具体名字和程序中略有不一样，其中文件名未指定大小，按需要分配）
+
 ## 函数
 oshfs_init 用于创建文件系统，初始化第0块 oshfs_getattr用于获取文件信息
 
@@ -53,4 +55,5 @@ finenew用于找到下一个可用块
 ## 结果
 实验测试上的示例均可实现，并且具有一定的健壮性
 !["示例"](https://raw.githubusercontent.com/wtx1999/pics/master/%E5%9B%BE%E7%89%871.png)
+
 可实现大空间的写入，示例中的2G内容可以执行成功，但需要花费数分钟的时间，速度随占空间大小增大减慢速度较快。
