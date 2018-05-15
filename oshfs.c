@@ -1,4 +1,4 @@
-/*
+/*/*
 * Copyright 漏 2018 Zitian Li <ztlizitian@gmail.com>
 * This program is free software. It comes without any warranty, to
 * the extent permitted by applicable law. You can redistribute it
@@ -28,7 +28,6 @@ static void *mem[8192];
 size_t blocknr = 8192;//2^13
 size_t blocksize = 524288;//两个相乘得到4G,size/blocknr
 static int const head = 16; //在块头存两个数字,一个为本块序号，一个为连接的下一个，如果没有为0
-int blocknum = 0;//初始块（0），不进行存储
 
 static int initializeblock(int block_num) {
 
@@ -51,10 +50,13 @@ static void *allocate(int block_num, int size) {
 	return (void*)((char*)mem[block_num] + offset);
 }
 int findnew() {
+	int *a = (int*)((char*)mem[0] + 8);
+	int blocknum = *(int*)((char*)mem[0] + 8);
 	int i = blocknum;
 	for (i = (blocknum + 1) % blocknr;i != blocknum;i = (i + 1) % blocknr) {
 		if (!mem[i]) {
 			blocknum = i;
+			*a = blocknum;
 			return i;
 		}
 	}
@@ -79,12 +81,15 @@ static int create_filenode(const char *filename, const struct stat *st)
 	i = findnew();
 	if (i == -1)
 		return -1;
-	initializeblock(i);
+	int sig;
+	sig=initializeblock(i);
+	if (sig == -1)
+		return -1;
 	node *root = *(node**)((char*)mem[0] + head);
 	node *newnode = (node *)allocate(i, sizeof(node));
 	newnode->filename = (char *)allocate(i, strlen(filename) + 1);
 	newnode->st = (struct stat *)allocate(i, sizeof(struct stat));
-	if (newnode->st == NULL | newnode->filename == NULL|newnode==NULL)
+	if (newnode->st == NULL | newnode->filename == NULL | newnode == NULL)
 		return -1;
 	memcpy(newnode->filename, filename, strlen(filename) + 1);
 	memcpy(newnode->st, st, sizeof(struct stat));
@@ -102,7 +107,7 @@ static int create_filenode(const char *filename, const struct stat *st)
 static void *oshfs_init(struct fuse_conn_info *conn)
 {
 	initializeblock(0);
-	node **rootadr = (node**)allocate(0, sizeof(node*));
+    node **rootadr = (node**)allocate(0, sizeof(node*));
 	*rootadr = NULL;
 	return NULL;
 }
@@ -132,9 +137,9 @@ static int oshfs_mknod(const char *path, mode_t mode, dev_t dev)
 	st.st_gid = fuse_get_context()->gid;
 	st.st_nlink = 1;
 	st.st_size = 0;
-	a=create_filenode(path + 1, &st);
+	a = create_filenode(path + 1, &st);
 	if (a == -1)
-		return -1;
+		return -ENOMEM;
 	return 0;
 }
 
@@ -157,7 +162,7 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 {
 	node *node = get_filenode(path);
 	if (node == NULL)
-		return -1;
+		return -ENOENT;
 	if (offset + size > node->st->st_size)
 		node->st->st_size = offset + size;
 	//offset为写入文件内容的偏移量，size为写入文件的大小，st_size为文件内容大小
@@ -165,13 +170,16 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 	int space = blocksize - node->hsize;//可用空间大小
 	int fblock = node->fblock;
 	int i;
+	int sig;
 	while (space<offset) {//当剩余空间不够偏移量
 		if (!mem[fblock]) return -1;
 		if (*((int*)mem[fblock] + 1) == 0) {//如果该块为尾时
 			int nextblock = findnew();
 			if (nextblock == -1)
-				return -1;
-			initializeblock(nextblock);
+				return -ENOMEM;
+			sig=initializeblock(nextblock);
+			if (sig == -1)
+				return -EEXIST;
 			*(int*)mem[fblock] = blocksize;//将当前块设为已满
 			*((int*)mem[fblock] + 1) = nextblock;//将当前块的下一块设为nextblock
 		}
@@ -186,8 +194,10 @@ static int oshfs_write(const char *path, const char *buf, size_t size, off_t off
 		if (*((int*)mem[fblock] + 1) == 0) {//如果该块为尾时
 			int nextblock = findnew();
 			if (nextblock == -1)
-				return -1;
-			initializeblock(nextblock);
+				return -ENOMEM;
+			sig=initializeblock(nextblock);
+			if (sig == -1)
+				return -EEXIST;
 			*(int*)mem[fblock] = blocksize;//将当前块设为已满
 			*((int*)mem[fblock] + 1) = nextblock;//将当前块的下一块设为nextblock
 		}
@@ -204,8 +214,9 @@ static int oshfs_truncate(const char *path, off_t size)
 {
 	node *node = get_filenode(path);
 	if (node == NULL)
-		return -1;
+		return -ENOENT;
 	node->st->st_size = size;
+	int sig;
 	int space = blocksize - node->hsize, fblock = node->fblock;
 	int a;
 	while (space<size) {
@@ -213,7 +224,11 @@ static int oshfs_truncate(const char *path, off_t size)
 		a = *((int*)mem[fblock] + 1);
 		if (a == 0) {//同上write
 			int nextblock = findnew();
-			initializeblock(nextblock);
+			if (nextblock == -1)
+				return -ENOMEM;
+			sig=initializeblock(nextblock);
+			if (sig == -1)
+				return -EEXIST;
 			*(int*)mem[fblock] = blocksize;//将当前块设为已满
 			*((int*)mem[fblock] + 1) = nextblock;//将当前块的下一块设为nextblock
 		}
@@ -239,7 +254,7 @@ static int oshfs_read(const char *path, char *buf, size_t size, off_t offset, st
 {
 	node *node = get_filenode(path);
 	if (node == NULL)
-		return -1;
+		return -ENOENT;
 	int ret = size;
 	int space = blocksize - node->hsize, fblock = node->fblock;
 	//同write中offset和size
@@ -269,7 +284,7 @@ static int oshfs_unlink(const char *path)
 	node *root = *(node**)((char*)mem[0] + head);
 	node *node1 = get_filenode(path);
 	if (node1 == NULL)
-		return -1;
+		return -ENOENT;
 	int fblock = node1->fblock, next;
 	if (!node1->last) {
 		root = node1->next;
